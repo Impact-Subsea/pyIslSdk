@@ -2,11 +2,10 @@
 
 #include "typesBinding.h"
 #include "types/sdkTypes.h"
-#include "maths/vector3.h"
-#include "maths/matrix3x3.h"
-#include "maths/quaternion.h"
 #include "utils/stringUtils.h"
-
+#include "maths/vector.h"
+#include "maths/matrix.h"
+#include "maths/quaternion.h"
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
@@ -44,21 +43,36 @@ void PySdk::initTypes(py::module &m)
         .def("to_bytes", [](ConstBuffer& self) -> py::bytes
         {
             return py::bytes(reinterpret_cast<const char*>(self.data), self.size);
-        }, "Return the image as a bytes object");
+        }, "Return as a bytes object");
 
     py::class_<ConnectionMeta>(m, "ConnectionMeta")
         .def(py::init<uint32_t>(), "Constructor with baudrate")
-        .def(py::init<uint32_t, uint16_t>(), "Constructor with ipAddress and port")
-        .def(py::init<uint32_t, uint32_t, uint16_t>(), "Constructor with baudrate, ipAddress, and port")
+        .def(py::init( [](const std::string& ipString, uint16_t port) {
+            bool_t err;
+            return new ConnectionMeta(StringUtils::toIp(ipString, err), port);
+        }), "Constructor with ip address and port")
         .def_readwrite("baudrate", &ConnectionMeta::baudrate, "baudrate")
         .def_property("ip_address", [](const ConnectionMeta& self) { return StringUtils::ipToStr(self.ipAddress);}, [](ConnectionMeta& self, const std::string& ipAddress) { bool_t err; self.ipAddress = StringUtils::toIp(ipAddress, err);}, "ip address")
+        .def_property("ip_address_int", [](const ConnectionMeta& self) { return self.ipAddress;}, [](ConnectionMeta& self, uint32_t ipAddress) { self.ipAddress = ipAddress;}, "ip address")
         .def_readwrite("port", &ConnectionMeta::port, "port")
         .def("is_different", &ConnectionMeta::isDifferent, "Check if two ConnectionMeta objects are different")
         .def("__repr__", [](const ConnectionMeta& self) { 
             if (self.baudrate)
-                return "Baudrate " + StringUtils::uintToStr(self.baudrate);
+                return "Baudrate " + StringUtils::toStr(self.baudrate);
             else
-                return "IP " + StringUtils::ipToStr(self.ipAddress) + ":" + StringUtils::uintToStr(self.port); });
+                return "IP " + StringUtils::ipToStr(self.ipAddress) + ":" + StringUtils::toStr(self.port); })
+        .def("to_dict", [](const ConnectionMeta& self) -> py::dict
+        {
+            py::dict pyDict;
+            if (self.baudrate)
+                pyDict["baudrate"] = self.baudrate;
+            else
+            {
+                pyDict["ip_address"] = StringUtils::ipToStr(self.ipAddress);
+                pyDict["port"] = self.port;
+            }
+            return pyDict;
+        }, "Convert to a dictionary");
         
     py::class_<AutoDiscovery> autoDiscovery(m, "AutoDiscovery");
 
@@ -68,7 +82,14 @@ void PySdk::initTypes(py::module &m)
 
     py::class_<Connection>(m, "Connection")
         .def_readonly("port", &Connection::sysPort, "The port")
-        .def_readonly("meta", &Connection::meta, "The connection meta");
+        .def_readonly("meta", &Connection::meta, "The connection meta")
+        .def("to_dict", [](const Connection& self) -> py::dict
+        {
+            py::dict pyDict;
+            pyDict["port"] = self.sysPort->id;
+            pyDict["meta"] = py::cast(self.meta).attr("to_dict")();
+            return pyDict;
+        }, "Convert to a dictionary");
 
     py::class_<DeviceScript>(m, "DeviceScript")
         .def(py::init<>())
@@ -76,8 +97,15 @@ void PySdk::initTypes(py::module &m)
         .def_readonly("state", &DeviceScript::state)
         .def_readonly("name", &DeviceScript::name)
         .def_readonly("code", &DeviceScript::code)
-         .def("__repr__", [](const DeviceScript& self) { 
-            return "name:" + self.name + " code:" + self.code;});
+        .def("__repr__", [](const DeviceScript& self) { 
+            return "name:" + self.name + " code:" + self.code;})
+        .def("to_dict", [](const DeviceScript& self) -> py::dict
+        {
+            py::dict pyDict;
+            pyDict["name"] = self.name;
+            pyDict["code"] = self.code;
+            return pyDict;
+        }, "Convert to a dictionary");
     
     py::enum_<DataState>(m, "DataState")
         .value("Invalid", DataState::Invalid)
@@ -111,88 +139,126 @@ void PySdk::initTypes(py::module &m)
         .def_readwrite("x", &Point::x)
         .def_readwrite("y", &Point::y);
 
-    py::class_<Vector3> vector3(m, "Vector3");
+
+    py::class_<Math::Vector3> vector3(m, "Vector3");
     vector3.def(py::init<>())
         .def(py::init<real_t, real_t, real_t>())
-        .def_readwrite("x", &Vector3::x)
-        .def_readwrite("y", &Vector3::y)
-        .def_readwrite("z", &Vector3::z)
+        .def(py::init( [](const py::list& list)
+        {
+            if (py::len(list) != 3) throw py::value_error("Invalid list size");
+            return new Math::Vector3(list[0].cast<real_t>(), list[1].cast<real_t>(), list[2].cast<real_t>());
+        }), "Constructor with a list")
+        .def_readwrite("x", &Math::Vector3::x)
+        .def_readwrite("y", &Math::Vector3::y)
+        .def_readwrite("z", &Math::Vector3::z)
         .def(py::self + py::self)
         .def(py::self - py::self)
         .def(py::self * real_t())
         .def(py::self += py::self)
         .def(py::self -= py::self)
         .def(py::self *= real_t())
-        .def("zero", &Vector3::zero)
-        .def("magnitude", &Vector3::magnitude)
-        .def("magnitude_sq", &Vector3::magnitudeSq)
-        .def("normalise", &Vector3::normalise)
-        //.def("dot", py::overload_cast<const Vector3&>(&Vector3::dot))
-        //.def("cross", py::overload_cast<const Vector3&>(&Vector3::cross))
-        .def("find_closest_cardinal_axis", &Vector3::findClosestCardinalAxis)
-        .def_static("get_vector_from_axis", &Vector3::getVectorFromAxis)
-        .def("__repr__", [](const Vector3& self) { 
-            return "x:" + StringUtils::realToStr(self.x, 0, 4) + " y:" + StringUtils::realToStr(self.y, 0, 4) + " z:" + 
-            StringUtils::realToStr(self.z, 0, 4);});
+        .def("zero", &Math::Vector3::zero)
+        .def("magnitude", &Math::Vector3::magnitude)
+        .def("magnitude_sq", &Math::Vector3::magnitudeSq)
+        .def("normalise", &Math::Vector3::normalise)
+        .def("dot", &Math::Vector3::dot, "Dot product", "v"_a)
+        .def("cross", &Math::Vector3::cross, "Cross product", "v"_a)
+        .def("find_closest_cardinal_axis", &Math::Vector3::findClosestCardinalAxis)
+        .def_static("get_vector_from_axis", &Math::Vector3::getVectorFromAxis)
+        .def("__repr__", [](const Math::Vector3& self) { 
+            return "x:" + StringUtils::toStr(self.x, 0, 4) + " y:" + StringUtils::toStr(self.y, 0, 4) + " z:" + 
+            StringUtils::toStr(self.z, 0, 4);});
 
-    py::enum_<Vector3::Axis>(vector3, "Axis")
-        .value("xPlus", Vector3::Axis::xPlus)
-        .value("xMinus", Vector3::Axis::xMinus)
-        .value("yPlus", Vector3::Axis::yPlus)
-        .value("yMinus", Vector3::Axis::yMinus)
-        .value("zPlus", Vector3::Axis::zPlus)
-        .value("zMinus", Vector3::Axis::zMinus);
+    py::enum_<Math::Vector3::Axis>(vector3, "Axis")
+        .value("xPlus", Math::Vector3::Axis::xPlus)
+        .value("xMinus", Math::Vector3::Axis::xMinus)
+        .value("yPlus", Math::Vector3::Axis::yPlus)
+        .value("yMinus", Math::Vector3::Axis::yMinus)
+        .value("zPlus", Math::Vector3::Axis::zPlus)
+        .value("zMinus", Math::Vector3::Axis::zMinus);
 
-    py::class_<Matrix3x3>(m, "Matrix3x3")
+    py::class_<Math::Matrix3x3>(m, "Matrix3x3")
         .def(py::init<>())
-        .def(py::init<real_t, real_t, real_t>())
-        .def(py::init<const Vector3&, const Vector3&>())
-        .def_readwrite("m", &Matrix3x3::m)
-        .def("identity", &Matrix3x3::identity, "Set the matrix to identity")
-        .def("transpose", &Matrix3x3::transpose, "Transpose the matrix")
+        .def(py::init( [](const py::list& list)
+        {
+            if (py::len(list) == 3)
+            {
+                const py::list& r0 = list[0];
+                const py::list& r1 = list[1];
+                const py::list& r2 = list[2];
+                return new Math::Matrix3x3(r0[0].cast<real_t>(), r0[1].cast<real_t>(), r0[2].cast<real_t>(),
+                                            r1[0].cast<real_t>(), r1[1].cast<real_t>(), r1[2].cast<real_t>(),
+                                            r2[0].cast<real_t>(), r2[1].cast<real_t>(), r2[2].cast<real_t>());
+            }
+            else if (py::len(list) == 9)
+            {
+                    return new Math::Matrix3x3(list[0].cast<real_t>(), list[1].cast<real_t>(), list[2].cast<real_t>(),
+                                            list[3].cast<real_t>(), list[4].cast<real_t>(), list[5].cast<real_t>(),
+                                            list[6].cast<real_t>(), list[7].cast<real_t>(), list[8].cast<real_t>());
+            }
+            throw py::value_error("Invalid list size");
+        }), "Constructor with a list")
+        .def(py::init<real_t, real_t, real_t>(), "Initalise a matrix from Eular angles" , "heading"_a, "pitch"_a, "roll"_a)
+        .def("__getitem__", [](Math::Matrix3x3& self, std::pair<uint_t, uint_t> index) {
+            if (index.first >= 3 || index.second >= 3) throw py::index_error();
+            return self[index.first][index.second];
+        }, "Get an element", "index"_a)
+        .def("__setitem__", [](Math::Matrix3x3& self, std::pair<uint_t, uint_t> index, real_t value) {
+            if (index.first >= 3 || index.second >= 3) throw py::index_error();
+            self[index.first][index.second] = value;
+        }, "Set an element", "index"_a, "value"_a)
+        .def("set_identity", &Math::Matrix3x3::setIdentity, "Set the matrix to identity")
+        .def("transpose", &Math::Matrix3x3::transpose, "Transpose the matrix")
         .def(py::self * py::self)
-        .def(py::self * Vector3())
-        .def("__repr__", [](const Matrix3x3& self) {
-            return StringUtils::realToStr(self.m[0][0], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[0][1], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[0][2], 0, 5, 0, true) + "\n" +
-                   StringUtils::realToStr(self.m[1][0], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[1][1], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[1][2], 0, 5, 0, true) + "\n" +
-                   StringUtils::realToStr(self.m[2][0], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[2][1], 0, 5, 0, true) + " " + StringUtils::realToStr(self.m[2][2], 0, 5, 0, true); });
+        .def(py::self * Math::Vector3())
+        .def("to_list", [](const Math::Matrix3x3& self)
+        {
+            return std::vector<std::vector<real_t>>{ {self[0][0], self[0][1], self[0][2]},
+                                                     {self[1][0], self[1][1], self[1][2]},
+                                                     {self[2][0], self[2][1], self[2][2]} }; 
+        }, "Convert to a list")
+        .def("__repr__", [](const Math::Matrix3x3& self) {
+            return StringUtils::toStr(self[0][0], 0, 5, 0, true) + " " + StringUtils::toStr(self[0][1], 0, 5, 0, true) + " " + StringUtils::toStr(self[0][2], 0, 5, 0, true) + "\n" +
+                   StringUtils::toStr(self[1][0], 0, 5, 0, true) + " " + StringUtils::toStr(self[1][1], 0, 5, 0, true) + " " + StringUtils::toStr(self[1][2], 0, 5, 0, true) + "\n" +
+                   StringUtils::toStr(self[2][0], 0, 5, 0, true) + " " + StringUtils::toStr(self[2][1], 0, 5, 0, true) + " " + StringUtils::toStr(self[2][2], 0, 5, 0, true); });
 
-    py::class_<EulerAngles>(m, "EulerAngles")
+    py::class_<Math::EulerAngles>(m, "EulerAngles")
         .def(py::init<>())
-        .def("rad_to_deg", &EulerAngles::radToDeg, "Convert radians to degrees")
-        .def_readwrite("heading", &EulerAngles::heading, "heading")
-        .def_readwrite("pitch", &EulerAngles::pitch, "pitch")
-        .def_readwrite("roll", &EulerAngles::roll, "roll")
-        .def("__repr__", [](const EulerAngles& self) { 
-            return "heading:" + StringUtils::realToStr(self.heading) + " pitch:" + StringUtils::realToStr(self.pitch) + " roll:" + 
-            StringUtils::realToStr(self.roll);}, "Convert to string");
+        .def("rad_to_deg", &Math::EulerAngles::radToDeg, "Convert radians to degrees", "rad_a")
+        .def_readwrite("heading", &Math::EulerAngles::heading, "heading")
+        .def_readwrite("pitch", &Math::EulerAngles::pitch, "pitch")
+        .def_readwrite("roll", &Math::EulerAngles::roll, "roll")
+        .def("__repr__", [](const Math::EulerAngles& self) { 
+            return "heading:" + StringUtils::toStr(self.heading) + " pitch:" + StringUtils::toStr(self.pitch) + " roll:" + 
+            StringUtils::toStr(self.roll);}, "Convert to string");
 
-    py::class_<Quaternion>(m, "Quaternion")
+    py::class_<Math::Quaternion>(m, "Quaternion")
         .def(py::init<>())
         .def(py::init<real_t, real_t, real_t, real_t>())
-        .def(py::init<const Vector3&, real_t>())
-        .def(py::init<const Vector3&>())
-        .def(py::init<const Matrix3x3&>())
-        .def_readwrite("w", &Quaternion::w)
-        .def_readwrite("x", &Quaternion::x)
-        .def_readwrite("y", &Quaternion::y)
-        .def_readwrite("z", &Quaternion::z)
+        .def(py::init<const Math::Vector3&, real_t>())
+        .def(py::init<const Math::Vector3&>())
+        .def(py::init<const Math::Matrix3x3&>())
+        .def(py::init( [](const py::list& list)
+        {
+            if (py::len(list) != 4) throw py::value_error("Invalid list size");
+            return new Math::Quaternion(list[0].cast<real_t>(), list[1].cast<real_t>(), list[2].cast<real_t>(), list[3].cast<real_t>());
+        }), "Constructor with a list")
+        .def_readwrite("w", &Math::Quaternion::w)
+        .def_readwrite("x", &Math::Quaternion::x)
+        .def_readwrite("y", &Math::Quaternion::y)
+        .def_readwrite("z", &Math::Quaternion::z)
         .def(py::self + py::self)
         .def(py::self * py::self)
-        .def(py::self * Vector3())
+        .def(py::self * Math::Vector3())
         .def(py::self += py::self)
         .def(py::self *= py::self)
-        .def("conjugate", &Quaternion::conjugate, "Conjugate of the quaternion")
-        .def("normalise", &Quaternion::normalise, "Normalise the quaternion")
-        .def("magnitude", &Quaternion::magnitude, "Magnitude of the quaternion")
-        .def("to_matrix", &Quaternion::toMatrix, "Convert to a matrix")
-        .def("to_axis_angle", &Quaternion::toAxisAngle, "Convert to an axis angle")
-        .def("to_euler_angles", &Quaternion::toEulerAngles, "Convert to radian euler angles", "heading_offset_rad"_a=0)
-        .def("angle_between", &Quaternion::angleBetween, "Angle between two quaternions", "q"_a, "axis"_a, "earth_frame"_a)
-        .def("get_rotation_about", &Quaternion::getRotationAbout, "Get rotation about an axis", "q"_a, "axis"_a)
-        .def("get_down_and_euler_offsets", &Quaternion::getDownAndEulerOffsets, "Get down and euler offsets", "down"_a, "euler_angles"_a)
-        .def("__repr__", [](const Quaternion& self) { 
-            return "w:" + StringUtils::realToStr(self.w, 0, 4) + " x:" + StringUtils::realToStr(self.x, 0, 4) + " y:" + 
-            StringUtils::realToStr(self.y, 0, 4) + " z:" + StringUtils::realToStr(self.z, 0, 4);});
+        .def("conjugate", &Math::Quaternion::conjugate, "Conjugate of the quaternion")
+        .def("normalise", &Math::Quaternion::normalise, "Normalise the quaternion")
+        .def("magnitude", &Math::Quaternion::magnitude, "Magnitude of the quaternion")
+        .def("to_matrix", &Math::Quaternion::toMatrix, "Convert to a matrix")
+        .def("to_euler_angles", &Math::Quaternion::toEulerAngles, "Convert to radian euler angles", "heading_offset_rad"_a=0)
+        .def("__repr__", [](const Math::Quaternion& self) { 
+            return "w:" + StringUtils::toStr(self.w, 0, 4) + " x:" + StringUtils::toStr(self.x, 0, 4) + " y:" + 
+            StringUtils::toStr(self.y, 0, 4) + " z:" + StringUtils::toStr(self.z, 0, 4);});
 }
 //--------------------------------------------------------------------------------------------------

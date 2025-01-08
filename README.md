@@ -67,6 +67,8 @@ This Python wapper project wraps the C++ SDK using the open source project pybin
     ```
     If using windows
     ```bash
-    $ cmake --build .
+    $ cmake --build . --config Debug
+    or
+    $ cmake --build . --config Release
 
 8. Copy the .pyd file from the folder pyIslSdk/build/Debug/ or pyIslSdk/build/Release/ into your python project and use import pyIslSdk in your python project.

@@ -1,11 +1,19 @@
 //------------------------------------------ Includes ----------------------------------------------
 
 #include "isd4000Binding.h"
+#include "deviceBinding.h"
 #include "devices/isd4000.h"
+#include "utils.h"
 #include <pybind11/stl.h>
 
 using namespace pybind11::literals;
 using namespace IslSdk;
+
+py::dict strOutputSetupToDict(const Isd4000::Settings::StrOutputSetup& setup);
+py::dict calCertToDict(const Isd4000::CalCert& cal);
+py::list pointArrayToList(const std::array<Point, 10>& points, uint_t length);
+Isd4000::Settings dictToSettings(const py::dict& d, const Isd4000::Settings& defualt);
+Isd4000::Settings::StrOutputSetup getFromDict(const py::dict& d, const char* key, const Isd4000::Settings::StrOutputSetup& defaultValue);
 
 //--------------------------------------------------------------------------------------------------
 void PySdk::initIsd4000(py::module &m)
@@ -17,6 +25,10 @@ void PySdk::initIsd4000(py::module &m)
         .def_readonly("mag", &Isd4000::mag, "Magnetometer sensor")
         .def("set_sensor_rates", &Isd4000::setSensorRates, "Set the sensor rates", "rate"_a)
         .def("set_settings", &Isd4000::setSettings, "Set the settings", "settings"_a, "save"_a)
+        .def("set_settings", [](Isd4000& self, const py::dict& dict, bool save) { 
+            Isd4000::Settings settings = dictToSettings(dict, self.settings);
+            self.setSettings(settings, save);
+        }, "Set the settings from a dictionary", "settings_dict"_a, "save"_a = false)
         .def("set_depth_script", &Isd4000::setDepthScript, "Set the depth script", "name"_a, "code"_a)
         .def("set_ahrs_script", &Isd4000::setAhrsScript, "Set the ahrs script", "name"_a, "code"_a)
         .def("get_scripts", &Isd4000::getScripts, "Get the scripts")
@@ -51,8 +63,8 @@ void PySdk::initIsd4000(py::module &m)
         .def_property_readonly("hard_coded_depth_output_strings", [](const Isd4000& self) { return self.hardCodedDepthOutputStrings; }, "Get the hard coded depth output strings")
         .def_property_readonly("hard_coded_ahrs_output_strings", [](const Isd4000& self) { return self.hardCodedAhrsOutputStrings; }, "Get the hard coded ahrs output strings")
         .def_property_readonly("script_vars", [](const Isd4000& self) { return self.scriptVars; }, "Get the script variables")
-        .def_property_readonly("on_depth", [](const Isd4000& self) { return self.onDepth; }, "Get the depth script")
-        .def_property_readonly("on_ahrs", [](const Isd4000& self) { return self.onAhrs; }, "Get the ahrs script")
+        .def_property_readonly("depth_script", [](const Isd4000& self) { return self.onDepth; }, "Get the depth script")
+        .def_property_readonly("ahrs_script", [](const Isd4000& self) { return self.onAhrs; }, "Get the ahrs script")
         .def_property_readonly("pressure_cal", [](const Isd4000& self) { return self.pressureCal; }, "Get the pressure calibration")
         .def_property_readonly("temperature_cal", [](const Isd4000& self) { return self.temperatureCal; }, "Get the temperature calibration")
         .def_readonly("on_pressure", &Isd4000::onPressure, "Signal emitted when new pressure data is available")
@@ -63,32 +75,33 @@ void PySdk::initIsd4000(py::module &m)
         .def_readonly("on_temperature_cal_cert", &Isd4000::onTemperatureCalCert, "Signal emitted when the temperature calibration has been received");
 
 
-    py::class_<Signal<Isd4000&, uint64_t, real_t, real_t, real_t>>(isd4000, "Signal_onPressure")
+    py::class_<Signal<Isd4000&, uint64_t, real_t, real_t, real_t>>(isd4000, "SignalOnPressure")
         .def("connect", &Signal<Isd4000&, uint64_t, real_t, real_t, real_t>::pyConnect, "Connect to the signal with a callback_function(isd4000, timeUs, pressure, depth, pressureRaw)")
         .def("disconnect", &Signal<Isd4000&, uint64_t, real_t, real_t, real_t>::pyDisconnect, "Disconnect a callback function from the signal");
 
-    py::class_<Signal<Isd4000&, real_t, real_t>>(isd4000, "Signal_onTemperature")
+    py::class_<Signal<Isd4000&, real_t, real_t>>(isd4000, "SignalOnTemperature")
         .def("connect", &Signal<Isd4000&, real_t, real_t>::pyConnect, "Connect to the signal with a callback_function(isd4000, temperature, temperatureRaw)")
         .def("disconnect", &Signal<Isd4000&, real_t, real_t>::pyDisconnect, "Disconnect a callback function from the signal");
 
-    py::class_<Signal<Isd4000&>>(isd4000, "Signal_onScriptDataReceived")
+    py::class_<Signal<Isd4000&>>(isd4000, "SignalOnScriptDataReceived")
         .def("connect", &Signal<Isd4000&>::pyConnect, "Connect to the signal with a callback_function(isd4000)")
         .def("disconnect", &Signal<Isd4000&>::pyDisconnect, "Disconnect a callback function from the signal");
 
-    py::class_<Signal<Isd4000&, bool_t>>(isd4000, "Signal_onSettingsUpdated")
+    py::class_<Signal<Isd4000&, bool_t>>(isd4000, "SignalOnSettingsUpdated")
         .def("connect", &Signal<Isd4000&, bool_t>::pyConnect, "Connect to the signal with a callback_function(isd4000, success)")
         .def("disconnect", &Signal<Isd4000&, bool_t>::pyDisconnect, "Disconnect a callback function from the signal");
 
-    py::class_<Signal<Isd4000&, const Isd4000::PressureCal&>>(isd4000, "Signal_onPressureCalCert")
+    py::class_<Signal<Isd4000&, const Isd4000::PressureCal&>>(isd4000, "SignalOnPressureCalCert")
         .def("connect", &Signal<Isd4000&, const Isd4000::PressureCal&>::pyConnect, "Connect to the signal with a callback_function(isd4000, cal)")
         .def("disconnect", &Signal<Isd4000&, const Isd4000::PressureCal&>::pyDisconnect, "Disconnect a callback function from the signal");
 
-    py::class_<Signal<Isd4000&, const Isd4000::TemperatureCal&>>(isd4000, "Signal_onTemperatureCalCert")
+    py::class_<Signal<Isd4000&, const Isd4000::TemperatureCal&>>(isd4000, "SignalOnTemperatureCalCert")
         .def("connect", &Signal<Isd4000&, const Isd4000::TemperatureCal&>::pyConnect, "Connect to the signal with a callback_function(isd4000, cal)")
         .def("disconnect", &Signal<Isd4000&, const Isd4000::TemperatureCal&>::pyDisconnect, "Disconnect a callback function from the signal");
 
     py::class_<Isd4000::Settings> isd4000Settings(isd4000, "Settings");
     isd4000Settings.def(py::init<>())
+        .def(py::init([](const py::dict& d) { return dictToSettings(d, Isd4000::Settings()); }))
         .def_readwrite("uart_mode", &Isd4000::Settings::uartMode, "The serial port mode")
         .def_readwrite("baudrate", &Isd4000::Settings::baudrate, "The serial port baudrate")
         .def_readwrite("parity", &Isd4000::Settings::parity, "The serial port parity")
@@ -109,13 +122,39 @@ void PySdk::initIsd4000(py::module &m)
         .def_readwrite("untare_str", &Isd4000::Settings::unTareStr, "The untare string")
         .def_readwrite("depth_str", &Isd4000::Settings::depthStr, "The depth string")
         .def_readwrite("ahrs_str", &Isd4000::Settings::ahrsStr, "The ahrs string")
-        .def("defaults", &Isd4000::Settings::defaults, "Set the settings to defaults");
+        .def("defaults", &Isd4000::Settings::defaults, "Set the settings to defaults")
+        .def("to_dict", [](const Isd4000::Settings& self)
+        {
+            py::dict d;
+            d["uart_mode"] = py::cast(self.uartMode).attr("name").cast<std::string>();
+            d["baudrate"] = self.baudrate;
+            d["parity"] = py::cast(self.parity).attr("name").cast<std::string>();
+            d["data_bits"] = self.dataBits;
+            d["stop_bits"] = py::cast(self.stopBits).attr("name").cast<std::string>();
+            d["ahrs_mode"] = self.ahrsMode;
+            d["orientation_offset"] = py::make_tuple(self.orientationOffset.w, self.orientationOffset.x, self.orientationOffset.y, self.orientationOffset.z);
+            d["heading_offset_rad"] = self.headingOffsetRad;
+            d["turns_about"] = py::make_tuple(self.turnsAbout.x, self.turnsAbout.y, self.turnsAbout.z);
+            d["turns_about_earth_frame"] = self.turnsAboutEarthFrame;
+            d["clr_turn"] = PySdk::customStrToDict(self.clrTurn);
+            d["set_heading_2_mag"] = PySdk::customStrToDict(self.setHeading2Mag);
+            d["filter_pressure"] = self.filterPressure;
+            d["depth_offset"] = self.depthOffset;
+            d["pressure_offset"] = self.pressureOffset;
+            d["latitude"] = self.latitude;
+            d["tare_str"] = PySdk::customStrToDict(self.tareStr);
+            d["untare_str"] = PySdk::customStrToDict(self.unTareStr);
+            d["depth_str"] = strOutputSetupToDict(self.depthStr);
+            d["ahrs_str"] = strOutputSetupToDict(self.ahrsStr);
+            return d;
+        }, "Convert to dictionary");
 
     py::class_<Isd4000::Settings::StrOutputSetup>(isd4000Settings, "StrOutputSetup")
         .def_readwrite("str_id", &Isd4000::Settings::StrOutputSetup::strId)
         .def_readwrite("interval_enabled", &Isd4000::Settings::StrOutputSetup::intervalEnabled)
         .def_readwrite("interval_ms", &Isd4000::Settings::StrOutputSetup::intervalMs)
-        .def_readwrite("interrogation", &Isd4000::Settings::StrOutputSetup::interrogation);
+        .def_readwrite("interrogation", &Isd4000::Settings::StrOutputSetup::interrogation)
+        .def("to_dict", &strOutputSetupToDict, "Convert to a dictionary");
 
     py::class_<Isd4000::SensorRates>(isd4000, "SensorRates")
         .def(py::init<>())
@@ -124,23 +163,57 @@ void PySdk::initIsd4000(py::module &m)
         .def_readwrite("gyro", &Isd4000::SensorRates::gyro, "The gyro rate")
         .def_readwrite("accel", &Isd4000::SensorRates::accel, "The accel rate")
         .def_readwrite("mag", &Isd4000::SensorRates::mag, "The mag rate")
-        .def_readwrite("temperature", &Isd4000::SensorRates::temperature, "The temperature rate");
+        .def_readwrite("temperature", &Isd4000::SensorRates::temperature, "The temperature rate")
+        .def("to_dict", [](const Isd4000::SensorRates& self)
+        {
+            py::dict d;
+            d["pressure"] = self.pressure;
+            d["ahrs"] = self.ahrs;
+            d["gyro"] = self.gyro;
+            d["accel"] = self.accel;
+            d["mag"] = self.mag;
+            d["temperature"] = self.temperature;
+            return d;
+        }, "Convert to dictionary");
 
     py::class_<Isd4000::CalCert>(isd4000, "CalCert")
         .def(py::init<>())
         .def_readwrite("year", &Isd4000::CalCert::year, "The year")
         .def_readwrite("month", &Isd4000::CalCert::month, "The month")
         .def_readwrite("day", &Isd4000::CalCert::day, "The day")
-        .def_readwrite("cal_points_length", &Isd4000::CalCert::calPointsLength, "The cal points length")
-        .def_readwrite("verify_points_length", &Isd4000::CalCert::verifyPointsLength, "The verify points length")
-        .def_readwrite("cal_points", &Isd4000::CalCert::calPoints, "The cal points")
-        .def_readwrite("verify_points", &Isd4000::CalCert::verifyPoints, "The verify points")
+        .def_property("cal_points", [](const Isd4000::CalCert& self) -> py::list {
+            py::list pyList;
+            for (uint_t i = 0; i < self.calPointsLength; i++) {
+                pyList.append(self.calPoints[i]);
+            }
+            return pyList;
+        }, [](Isd4000::CalCert &self, py::iterable pyIterable) {
+            self.calPointsLength = 0;
+            for (auto item : pyIterable) {
+                self.calPoints[self.calPointsLength] = item.cast<Point>();
+                self.calPointsLength++;
+            }
+        }, "The calibration points")
+        .def_property("verify_points", [](const Isd4000::CalCert& self) -> py::list {
+            py::list pyList;
+            for (uint_t i = 0; i < self.verifyPointsLength; i++) {
+                pyList.append(self.verifyPoints[i]);
+            }
+            return pyList;
+        }, [](Isd4000::CalCert &self, py::iterable pyIterable) {
+            self.verifyPointsLength = 0;
+            for (auto item : pyIterable) {
+                self.verifyPoints[self.verifyPointsLength] = item.cast<Point>();
+                self.verifyPointsLength++;
+            }
+        }, "The verify points")
         .def_readwrite("number", &Isd4000::CalCert::number, "The number")
         .def_readwrite("organisation", &Isd4000::CalCert::organisation, "The organisation")
         .def_readwrite("person", &Isd4000::CalCert::person, "The person")
         .def_readwrite("equipment", &Isd4000::CalCert::equipment, "The equipment")
         .def_readwrite("equipment_sn", &Isd4000::CalCert::equipmentSn, "The equipment serial number")
-        .def_readwrite("notes", &Isd4000::CalCert::notes, "The notes");
+        .def_readwrite("notes", &Isd4000::CalCert::notes, "The notes")
+        .def("to_dict", &calCertToDict, "Convert to dictionary");
 
     py::class_<Isd4000::AhrsCal>(isd4000, "AhrsCal")
         .def(py::init<>())
@@ -153,16 +226,155 @@ void PySdk::initIsd4000(py::module &m)
     py::class_<Isd4000::PressureCal>(isd4000, "PressureCal")
         .def(py::init<>())
         .def_readwrite("state", &Isd4000::PressureCal::state, "The state")
-        .def_readwrite("cal", &Isd4000::PressureCal::cal, "The cal");
+        .def_readwrite("cal", &Isd4000::PressureCal::cal, "The cal")
+        .def("to_dict", [](const Isd4000::PressureCal& self)
+        {
+            py::dict d;
+            d["state"] = py::cast(self.state).attr("name").cast<std::string>();
+            d["cal"] = calCertToDict(self.cal);
+            return d;
+        }, "Convert to dictionary");
 
     py::class_<Isd4000::TemperatureCal>(isd4000, "TemperatureCal")
         .def(py::init<>())
         .def_readwrite("state", &Isd4000::TemperatureCal::state, "The state")
         .def_readwrite("cal", &Isd4000::TemperatureCal::cal, "The cal")
-        .def_readwrite("adc_offset", &Isd4000::TemperatureCal::adcOffset, "The adc offset");
+        .def_readwrite("adc_offset", &Isd4000::TemperatureCal::adcOffset, "The adc offset")
+        .def("to_dict", [](const Isd4000::TemperatureCal& self)
+        {
+            py::dict d;
+            d["state"] = py::cast(self.state).attr("name").cast<std::string>();
+            d["cal"] = calCertToDict(self.cal);
+            d["adc_offset"] = self.adcOffset;
+            return d;
+        }, "Convert to dictionary");
+}
+//--------------------------------------------------------------------------------------------------
+py::dict strOutputSetupToDict(const Isd4000::Settings::StrOutputSetup& setup)
+{
+    py::dict d;
+    d["str_id"] = setup.strId;
+    d["interval_enabled"] = setup.intervalEnabled;
+    d["interval_ms"] = setup.intervalMs;
+    d["interrogation"] = PySdk::customStrToDict(setup.interrogation);
+    return d;
+}
+//--------------------------------------------------------------------------------------------------
+py::dict calCertToDict(const Isd4000::CalCert& cal)
+{
+    py::dict d;
+    d["year"] = cal.year;
+    d["month"] = cal.month;
+    d["day"] = cal.day;
+    d["cal_points"] = pointArrayToList(cal.calPoints, cal.calPointsLength);
+    d["verify_points"] = pointArrayToList(cal.verifyPoints, cal.verifyPointsLength);
+    d["number"] = cal.number;
+    d["organisation"] = cal.organisation;
+    d["person"] = cal.person;
+    d["equipment"] = cal.equipment;
+    d["equipment_sn"] = cal.equipmentSn;
+    d["notes"] = cal.notes;
+    return d;
+}
+//--------------------------------------------------------------------------------------------------
+py::list pointArrayToList(const std::array<Point, 10>& points, uint_t length)
+{
+    py::list pyList;
+    for (uint_t i = 0; i < length; i++)
+    {
+        pyList.append(points[i]);
+    }
+    return pyList;
+}
+//--------------------------------------------------------------------------------------------------
+Isd4000::Settings dictToSettings(const py::dict& d, const Isd4000::Settings& defualt) 
+{
+    Isd4000::Settings settings;
+    settings.uartMode = PySdk::getDictValue(d, "uart_mode", defualt.uartMode);
+    settings.baudrate = PySdk::getDictValue(d, "baudrate", defualt.baudrate);
+    settings.parity = PySdk::getDictValue(d, "parity", defualt.parity);
+    settings.dataBits = PySdk::getDictValue(d, "data_bits", defualt.dataBits);
+    settings.stopBits = PySdk::getDictValue(d, "stop_bits", defualt.stopBits);
+    settings.ahrsMode = PySdk::getDictValue(d, "ahrs_mode", defualt.ahrsMode);
+    settings.orientationOffset = PySdk::getDictValue(d, "orientation_offset", defualt.orientationOffset);
+    settings.headingOffsetRad = PySdk::getDictValue(d, "heading_offset_rad", defualt.headingOffsetRad);
+    settings.turnsAbout = PySdk::getDictValue(d, "turns_about", defualt.turnsAbout);
+    settings.turnsAboutEarthFrame = PySdk::getDictValue(d, "turns_about_earth_frame", defualt.turnsAboutEarthFrame);
+    settings.clrTurn = PySdk::getDictValue(d, "clr_turn", defualt.clrTurn);
+    settings.setHeading2Mag = PySdk::getDictValue(d, "set_heading2_mag", defualt.setHeading2Mag);
+    settings.filterPressure = PySdk::getDictValue(d, "filter_pressure", defualt.filterPressure);
+    settings.depthOffset = PySdk::getDictValue(d, "depth_offset", defualt.depthOffset);
+    settings.pressureOffset = PySdk::getDictValue(d, "pressure_offset", defualt.pressureOffset);
+    settings.latitude = PySdk::getDictValue(d, "latitude", defualt.latitude);
+    settings.tareStr = PySdk::getDictValue(d, "tare_str", defualt.tareStr);
+    settings.unTareStr = PySdk::getDictValue(d, "untare_str", defualt.unTareStr);
+    settings.depthStr = getFromDict(d, "depth_str", defualt.depthStr);
+    settings.ahrsStr = getFromDict(d, "ahrs_str", defualt.ahrsStr);
+    return settings;
+}
+//--------------------------------------------------------------------------------------------------
+Isd4000::Settings::StrOutputSetup getFromDict(const py::dict& d, const char* key, const Isd4000::Settings::StrOutputSetup& defaultValue)
+{
+    if (d.contains(key))
+    {
+        if (py::isinstance<py::dict>(d[key]))
+        {
+            py::dict dict = d[key].cast<py::dict>();
+            Isd4000::Settings::StrOutputSetup setup;
 
-    py::class_<Isd4000::PressureSenorInfo>(isd4000, "PressureSenorInfo") 
-        .def_readonly("min_pressure", &Isd4000::PressureSenorInfo::minPressure, "The minimum pressure")
-        .def_readonly("max_pressure", &Isd4000::PressureSenorInfo::maxPressure, "The maximum pressure");
+            if (dict.contains("str_id"))
+            {
+                if (py::isinstance<py::int_>(dict["str_id"]))
+                {
+                    setup.strId = dict["str_id"].cast<uint8_t>();
+                }
+                else
+                {
+                    throw py::type_error("Type mismatch: Expected int for key[" + std::string(key) + "][str_id], got " + std::string(py::str(d[key].get_type())));
+                }
+            }
+            else
+            {
+                setup.strId = defaultValue.strId;
+            }
+
+            if (dict.contains("interval_enabled"))
+            {
+                if (py::isinstance<py::bool_>(dict["interval_enabled"]))
+                {
+                    setup.intervalEnabled = dict["interval_enabled"].cast<bool_t>();
+                }
+                else
+                {
+                    throw py::type_error("Type mismatch: Expected bool for key[" + std::string(key) + "][interval_enabled], got " + std::string(py::str(d[key].get_type())));
+                }
+            }
+            else
+            {
+                setup.intervalEnabled = defaultValue.intervalEnabled;
+            }
+
+            if (dict.contains("interval_ms"))
+            {
+                if (py::isinstance<py::int_>(dict["interval_ms"]))
+                {
+                    setup.intervalMs = dict["interval_ms"].cast<uint32_t>();
+                }
+                else
+                {
+                    throw py::type_error("Type mismatch: Expected int for key[" + std::string(key) + "][interval_ms], got " + std::string(py::str(d[key].get_type())));
+                }
+            }
+            else
+            {
+                setup.intervalMs = defaultValue.intervalMs;
+            }
+        }
+        else
+        {
+            throw py::type_error("Type mismatch: Expected dict for key " + std::string(key) + ", got " + std::string(py::str(d[key].get_type())));
+        }
+    }
+    return defaultValue;
 }
 //--------------------------------------------------------------------------------------------------
